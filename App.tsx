@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import UploadZone from './components/UploadZone';
 import ResultCard from './components/ResultCard';
 import { COUNTRIES } from './constants';
@@ -18,6 +18,9 @@ const App: React.FC = () => {
   });
 
   const [globalError, setGlobalError] = useState<string | null>(null);
+  
+  // Ref to track if generation should continue (handles "Start Over" interruption)
+  const shouldContinueRef = useRef(false);
 
   const handleImageSelected = (base64: string, mimeType: string) => {
     setSourceImage({ base64, mimeType });
@@ -25,7 +28,9 @@ const App: React.FC = () => {
     startGeneration(base64, mimeType);
   };
 
-  const startGeneration = (base64: string, mimeType: string) => {
+  const startGeneration = async (base64: string, mimeType: string) => {
+    shouldContinueRef.current = true;
+
     // Reset all statuses to loading
     setResults(prev => {
       const next = { ...prev };
@@ -35,10 +40,19 @@ const App: React.FC = () => {
       return next;
     });
 
-    // Initiate requests in parallel
-    COUNTRIES.forEach(country => {
-      processCountry(base64, mimeType, country);
-    });
+    // Initiate requests SEQUENTIALLY to avoid Rate Limits (429 Error)
+    // The previous parallel approach triggered the API spam filter.
+    for (const country of COUNTRIES) {
+      // Check if user clicked "Start Over"
+      if (!shouldContinueRef.current) break;
+
+      await processCountry(base64, mimeType, country);
+      
+      // Add a small delay between requests to be gentle on the API
+      if (shouldContinueRef.current) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
   };
 
   const processCountry = async (base64: string, mimeType: string, country: CountryConfig) => {
@@ -83,6 +97,7 @@ const App: React.FC = () => {
   };
 
   const handleReset = () => {
+    shouldContinueRef.current = false; // Stop any ongoing loop
     setSourceImage(null);
     setResults(prev => {
       const next: Record<string, GeneratedImage> = {};
@@ -112,8 +127,7 @@ const App: React.FC = () => {
           {sourceImage && (
             <button 
               onClick={handleReset}
-              disabled={isAnyLoading}
-              className="text-sm text-gray-600 hover:text-red-600 font-medium disabled:opacity-50 transition-colors"
+              className="text-sm text-gray-600 hover:text-red-600 font-medium transition-colors"
             >
               Start Over
             </button>
@@ -150,7 +164,9 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="h-0.5 w-16 bg-gray-200"></div>
-              <div className="text-gray-400 text-sm italic">Generating 6 variants...</div>
+              <div className="text-gray-400 text-sm italic">
+                {isAnyLoading ? 'Generating variants...' : 'Generation Complete'}
+              </div>
             </div>
           )}
         </div>
