@@ -3,7 +3,7 @@ import { CountryConfig } from '../types';
 
 // Initialize the Gemini client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
+console.log(process.env.API_KEY)
 /**
  * Generates a variant of the uploaded person in a specific country context.
  */
