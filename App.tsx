@@ -28,7 +28,7 @@ const App: React.FC = () => {
     startGeneration(base64, mimeType);
   };
 
-  const startGeneration = async (base64: string, mimeType: string) => {
+  const startGeneration = (base64: string, mimeType: string) => {
     shouldContinueRef.current = true;
 
     // Reset all statuses to loading
@@ -40,25 +40,21 @@ const App: React.FC = () => {
       return next;
     });
 
-    // Initiate requests SEQUENTIALLY to avoid Rate Limits (429 Error)
-    for (const country of COUNTRIES) {
-      // Check if user clicked "Start Over"
-      if (!shouldContinueRef.current) break;
-
-      await processCountry(base64, mimeType, country);
-      
-      // Add a 10-second delay between requests to be extra gentle on the Free Tier API
-      // If the API asks for more time (via 429), the service layer will handle the longer wait.
-      if (shouldContinueRef.current) {
-        await new Promise(resolve => setTimeout(resolve, 10000));
-      }
-    }
+    // Initiate requests IN PARALLEL
+    // The service layer handles rate limit retries (429) internally.
+    // This allows the UI to show all cards loading at once.
+    COUNTRIES.forEach(country => {
+      processCountry(base64, mimeType, country);
+    });
   };
 
   const processCountry = async (base64: string, mimeType: string, country: CountryConfig) => {
     try {
       const imageUrl = await generateCountryVariant(base64, mimeType, country);
       
+      // Check if user has reset the app while this was generating
+      if (!shouldContinueRef.current) return;
+
       setResults(prev => ({
         ...prev,
         [country.id]: {
@@ -68,6 +64,8 @@ const App: React.FC = () => {
         }
       }));
     } catch (err: any) {
+      if (!shouldContinueRef.current) return;
+
       // Error is already cleaned in the service layer, but we ensure it's a string here
       const errorMessage = typeof err.message === 'string' ? err.message : 'Unknown error occurred';
       
@@ -100,7 +98,7 @@ const App: React.FC = () => {
   };
 
   const handleReset = () => {
-    shouldContinueRef.current = false; // Stop any ongoing loop
+    shouldContinueRef.current = false; // Stop any ongoing loop/updates
     setSourceImage(null);
     setResults(prev => {
       const next: Record<string, GeneratedImage> = {};
