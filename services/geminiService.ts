@@ -4,11 +4,9 @@ import { CountryConfig } from '../types';
 // Initialize the Gemini client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
 /**
  * Generates a variant of the uploaded person in a specific country context.
- * Includes retry logic for rate limits and error message cleaning.
+ * Single attempt only (no retries/waiting) for maximum speed.
  */
 export const generateCountryVariant = async (
   base64Image: string,
@@ -37,113 +35,73 @@ export const generateCountryVariant = async (
     - Natural skin texture (do not airbrush).
   `;
 
-  // Retry up to 3 times for Quota errors
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [
-            { text: prompt },
-            { inlineData: { data: cleanBase64, mimeType: mimeType } },
-          ],
-        },
-        config: {
-          temperature: 0.3,
-          safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-          ],
-        }
-      });
-
-      // Safely access candidates
-      const candidate = response.candidates?.[0];
-
-      if (!candidate) throw new Error("No candidates returned from the API.");
-
-      if (!candidate.content) {
-        const reason = (candidate as any).finishReason || 'Unknown';
-        throw new Error(`Generation blocked by safety filters. Reason: ${reason}`);
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { data: cleanBase64, mimeType: mimeType } },
+        ],
+      },
+      config: {
+        temperature: 0.3,
+        safetySettings: [
+          { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+          { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+          { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+          { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+        ],
       }
+    });
 
-      const parts = candidate.content.parts;
-      if (!parts || parts.length === 0) throw new Error("No content parts available in the response.");
+    // Safely access candidates
+    const candidate = response.candidates?.[0];
 
-      // Extract the image from the response
-      for (const part of parts) {
-        if (part.inlineData && part.inlineData.data) {
-          return `data:image/png;base64,${part.inlineData.data}`;
-        }
-      }
+    if (!candidate) throw new Error("No candidates returned from the API.");
 
-      // If no image found
-      const textPart = parts.find(p => p.text);
-      if (textPart && textPart.text) {
-         throw new Error(`Model returned text instead of image: ${textPart.text.substring(0, 100)}...`);
-      }
-      throw new Error('No image data found in response.');
-
-    } catch (error: any) {
-      lastError = error;
-      
-      // 1. CLEAN THE ERROR MESSAGE
-      // The API often returns a JSON object inside the error.message string.
-      // We regex for the JSON part or use the message as is.
-      let cleanMessage = error.message || 'Unknown error';
-      let fullJsonBody = cleanMessage; 
-
-      // Attempt to extract JSON { "error": ... } from the string
-      const jsonMatch = cleanMessage.match(/(\{.*"error":.*\})/s);
-      if (jsonMatch) {
-        fullJsonBody = jsonMatch[1]; // Keep the JSON body for analysis
-        try {
-          const parsed = JSON.parse(fullJsonBody);
-          if (parsed.error && parsed.error.message) {
-            cleanMessage = parsed.error.message;
-          }
-        } catch (e) {
-          // If parsing fails, just leave cleanMessage as the full string
-          // but we will try to strip the "Error: ..." prefix if present
-          cleanMessage = cleanMessage.replace(/^[A-Za-z]+Error:\s*/, '');
-        }
-      }
-
-      // 2. CHECK FOR QUOTA/RATE LIMITS
-      const isQuotaError = cleanMessage.includes('429') || 
-                           cleanMessage.includes('quota') || 
-                           cleanMessage.includes('RESOURCE_EXHAUSTED');
-
-      if (isQuotaError && attempt < 3) {
-        // 3. SMART WAIT TIME
-        // Look for "Please retry in 25.98s" pattern in the raw error
-        let waitTime = 30000; // Default fallback: 30 seconds
-        
-        // Regex to find "retry in X s" or "retry in X.X s"
-        const retryTimeMatch = fullJsonBody.match(/retry in ([\d\.]+)s/);
-        
-        if (retryTimeMatch && retryTimeMatch[1]) {
-          const seconds = parseFloat(retryTimeMatch[1]);
-          if (!isNaN(seconds)) {
-            // Wait the requested time + 2 seconds buffer
-            waitTime = Math.ceil(seconds * 1000) + 2000;
-          }
-        }
-
-        console.warn(`Quota hit for ${country.name}. Waiting ${waitTime/1000}s before retry (Attempt ${attempt}/3).`);
-        await sleep(waitTime);
-        continue; // Retry the loop
-      }
-
-      // If we are throwing the error finally, ensure we only throw the clean text
-      console.error(`Error generating image for ${country.name}:`, cleanMessage);
-      throw new Error(cleanMessage);
+    if (!candidate.content) {
+      const reason = (candidate as any).finishReason || 'Unknown';
+      throw new Error(`Generation blocked by safety filters. Reason: ${reason}`);
     }
-  }
 
-  throw lastError || new Error("Failed to generate image after retries.");
+    const parts = candidate.content.parts;
+    if (!parts || parts.length === 0) throw new Error("No content parts available in the response.");
+
+    // Extract the image from the response
+    for (const part of parts) {
+      if (part.inlineData && part.inlineData.data) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+
+    // If no image found
+    const textPart = parts.find(p => p.text);
+    if (textPart && textPart.text) {
+       throw new Error(`Model returned text instead of image: ${textPart.text.substring(0, 100)}...`);
+    }
+    throw new Error('No image data found in response.');
+
+  } catch (error: any) {
+    // CLEAN THE ERROR MESSAGE
+    // The API often returns a JSON object inside the error.message string.
+    let cleanMessage = error.message || 'Unknown error';
+    
+    // Attempt to extract JSON { "error": ... } from the string to get the clean message
+    const jsonMatch = cleanMessage.match(/(\{.*"error":.*\})/s);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed.error && parsed.error.message) {
+          cleanMessage = parsed.error.message;
+        }
+      } catch (e) {
+        // Parsing failed, strip prefix
+        cleanMessage = cleanMessage.replace(/^[A-Za-z]+Error:\s*/, '');
+      }
+    }
+
+    console.error(`Error generating image for ${country.name}:`, cleanMessage);
+    throw new Error(cleanMessage);
+  }
 };
