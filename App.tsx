@@ -47,10 +47,10 @@ const App: React.FC = () => {
 
       await processCountry(base64, mimeType, country);
       
-      // Add a 5-second delay between requests to be gentle on the Free Tier API
-      // The service layer also has a retry mechanism, but this proactive delay helps avoid waiting 30s.
+      // Add a 10-second delay between requests to be extra gentle on the Free Tier API
+      // If the API asks for more time (via 429), the service layer will handle the longer wait.
       if (shouldContinueRef.current) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
   };

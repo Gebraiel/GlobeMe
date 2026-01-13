@@ -91,34 +91,55 @@ export const generateCountryVariant = async (
     } catch (error: any) {
       lastError = error;
       
-      // Clean up the error message
+      // 1. CLEAN THE ERROR MESSAGE
+      // The API often returns a JSON object inside the error.message string.
+      // We regex for the JSON part or use the message as is.
       let cleanMessage = error.message || 'Unknown error';
-      try {
-        // Attempt to parse if it's a JSON string
-        const jsonMatch = cleanMessage.match(/\{.*\}/s);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
+      let fullJsonBody = cleanMessage; 
+
+      // Attempt to extract JSON { "error": ... } from the string
+      const jsonMatch = cleanMessage.match(/(\{.*"error":.*\})/s);
+      if (jsonMatch) {
+        fullJsonBody = jsonMatch[1]; // Keep the JSON body for analysis
+        try {
+          const parsed = JSON.parse(fullJsonBody);
           if (parsed.error && parsed.error.message) {
             cleanMessage = parsed.error.message;
           }
+        } catch (e) {
+          // If parsing fails, just leave cleanMessage as the full string
+          // but we will try to strip the "Error: ..." prefix if present
+          cleanMessage = cleanMessage.replace(/^[A-Za-z]+Error:\s*/, '');
         }
-      } catch (e) {
-        // Parsing failed, stick with original message
       }
 
-      // Check for Rate Limit / Quota errors
+      // 2. CHECK FOR QUOTA/RATE LIMITS
       const isQuotaError = cleanMessage.includes('429') || 
                            cleanMessage.includes('quota') || 
                            cleanMessage.includes('RESOURCE_EXHAUSTED');
 
       if (isQuotaError && attempt < 3) {
-        console.warn(`Quota hit for ${country.name}. Retrying in 30s... (Attempt ${attempt}/3)`);
-        // Wait 30 seconds before retrying (API usually asks for ~25s)
-        await sleep(30000);
-        continue;
+        // 3. SMART WAIT TIME
+        // Look for "Please retry in 25.98s" pattern in the raw error
+        let waitTime = 30000; // Default fallback: 30 seconds
+        
+        // Regex to find "retry in X s" or "retry in X.X s"
+        const retryTimeMatch = fullJsonBody.match(/retry in ([\d\.]+)s/);
+        
+        if (retryTimeMatch && retryTimeMatch[1]) {
+          const seconds = parseFloat(retryTimeMatch[1]);
+          if (!isNaN(seconds)) {
+            // Wait the requested time + 2 seconds buffer
+            waitTime = Math.ceil(seconds * 1000) + 2000;
+          }
+        }
+
+        console.warn(`Quota hit for ${country.name}. Waiting ${waitTime/1000}s before retry (Attempt ${attempt}/3).`);
+        await sleep(waitTime);
+        continue; // Retry the loop
       }
 
-      // If it's not a quota error, or we ran out of retries, throw the clean message
+      // If we are throwing the error finally, ensure we only throw the clean text
       console.error(`Error generating image for ${country.name}:`, cleanMessage);
       throw new Error(cleanMessage);
     }
