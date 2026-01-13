@@ -41,16 +41,16 @@ const App: React.FC = () => {
     });
 
     // Initiate requests SEQUENTIALLY to avoid Rate Limits (429 Error)
-    // The previous parallel approach triggered the API spam filter.
     for (const country of COUNTRIES) {
       // Check if user clicked "Start Over"
       if (!shouldContinueRef.current) break;
 
       await processCountry(base64, mimeType, country);
       
-      // Add a small delay between requests to be gentle on the API
+      // Add a 5-second delay between requests to be gentle on the Free Tier API
+      // The service layer also has a retry mechanism, but this proactive delay helps avoid waiting 30s.
       if (shouldContinueRef.current) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
   };
@@ -68,6 +68,9 @@ const App: React.FC = () => {
         }
       }));
     } catch (err: any) {
+      // Error is already cleaned in the service layer, but we ensure it's a string here
+      const errorMessage = typeof err.message === 'string' ? err.message : 'Unknown error occurred';
+      
       console.error(`Failed for ${country.name}`, err);
       setResults(prev => ({
         ...prev,
@@ -75,7 +78,7 @@ const App: React.FC = () => {
           countryId: country.id,
           imageUrl: null,
           status: 'error',
-          error: err.message || 'Unknown error'
+          error: errorMessage
         }
       }));
     }
